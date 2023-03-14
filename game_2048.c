@@ -39,6 +39,7 @@ typedef struct {
     uint32_t moves;
     int8_t selected_menu_item;
     uint32_t top_score;
+    FuriMutex* mutex;
 } GameState;
 
 typedef struct {
@@ -103,7 +104,8 @@ static void gray_canvas(Canvas* const canvas) {
 }
 
 static void draw_callback(Canvas* const canvas, void* ctx) {
-    const GameState* game_state = acquire_mutex((ValueMutex*)ctx, 25);
+    const GameState* game_state = ctx;
+    furi_mutex_acquire(game_state->mutex, FuriWaitForever);
     if(game_state == NULL) return;
 
     canvas_clear(canvas);
@@ -180,7 +182,7 @@ static void draw_callback(Canvas* const canvas, void* ctx) {
         canvas_draw_str_aligned(canvas, 64, 48, AlignCenter, AlignBottom, buf);
     }
 
-    release_mutex((ValueMutex*)ctx, game_state);
+    furi_mutex_release(game_state->mutex);
 }
 
 void calculate_move_to_left(uint8_t arr[], MoveResult* const move_result) {
@@ -380,8 +382,8 @@ int32_t game_2048_app() {
 
     MoveResult* move_result = malloc(sizeof(MoveResult));
 
-    ValueMutex state_mutex;
-    if(!init_mutex(&state_mutex, game_state, sizeof(GameState))) {
+    game_state->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    if(!game_state->mutex) {
         FURI_LOG_E("SnakeGame", "cannot create mutex\r\n");
         free(game_state);
         return 255;
@@ -391,7 +393,7 @@ int32_t game_2048_app() {
     FuriMessageQueue* event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
 
     ViewPort* view_port = view_port_alloc();
-    view_port_draw_callback_set(view_port, draw_callback, &state_mutex);
+    view_port_draw_callback_set(view_port, draw_callback, game_state);
     view_port_input_callback_set(view_port, input_callback, event_queue);
 
     Gui* gui = furi_record_open(RECORD_GUI);
@@ -404,7 +406,7 @@ int32_t game_2048_app() {
             // handle only press event, ignore repeat/release events
             if(input.type != InputTypePress) continue;
 
-            GameState* game_state = (GameState*)acquire_mutex_block(&state_mutex);
+            furi_mutex_acquire(game_state->mutex, FuriWaitForever);
 
             switch(game_state->state) {
             case GameStateMenu:
@@ -489,7 +491,7 @@ int32_t game_2048_app() {
             }
 
             view_port_update(view_port);
-            release_mutex(&state_mutex, game_state);
+            furi_mutex_release(game_state->mutex);
         }
     }
 
@@ -500,7 +502,7 @@ int32_t game_2048_app() {
 
     furi_message_queue_free(event_queue);
 
-    delete_mutex(&state_mutex);
+    furi_mutex_free(game_state->mutex);
 
     free(game_state);
     free(move_result);
